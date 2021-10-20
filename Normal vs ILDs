@@ -1,0 +1,75 @@
+# set working directory 
+setwd("C:/Users/T.Refaee/Downloads/Bootstrapped-Modified-ComBat-main/Bootstrapped-Modified-ComBat-main/New folder")
+
+# Read data
+Data<-read.csv("Data.csv", header= TRUE, sep = ";",dec = ",")
+
+
+
+# In Silico Trial exper
+
+# split data into training and validation
+set.seed(1)
+PatientNumbers <- unique(Data$General_PatientID)
+Indices <- sample(length(PatientNumbers))
+PatientNumbers <- PatientNumbers[Indices]
+Data_tr <- Data[Data$General_PatientID %in% PatientNumbers[1:(length(Indices) * 0.75)] ,]
+Data_va <- Data[!(Data$General_PatientID %in% PatientNumbers[1:(length(Indices) * 0.75)]),]
+
+
+# feature selecton on the training dataset
+
+# 1 Remove features with (near)Zero variance
+
+badCols1 <- nearZeroVar(Data_tr)
+if(length(Data_tr) > 0){
+  Data_tr <- Data_tr[, -nearZeroVar(Data_tr)] 
+}
+
+Data_tr1<-Data_tr[,c(1,3:dim(Data_tr)[2])]
+
+#######################
+
+# 2 Remove highly correlated features
+corMatrix=  cor(Data_tr1)
+highly_correlated_columns = findCorrelation(corMatrix, cutoff = 0.90, verbose = F, names = FALSE, exact = TRUE)
+Nor_uncorr<- Data_tr1[,-highly_correlated_columns]
+
+
+# 3 run Boruta algorith 
+set.seed(2)
+boruta_Nor<-Boruta(Outcome~., data = Nor_uncorr, doTrac=2, maxRuns= 1000)
+Nor_Feats<-Nor_uncorr[,getSelectedAttributes(boruta_Nor)]
+
+
+# 4 use Gini index to determine the  most important features
+
+set.seed(3)
+ImpFeats<-randomForest(y= as.factor(Nor_uncorr$Outcome), x = Nor_Feats)
+Purities <- sort(ImpFeats$importance, decreasing=TRUE)
+Indexes <- match(Purities[1:10], ImpFeats$importance)
+RowNames <- row.names(ImpFeats$importance)[Indexes]
+
+####Random Forest######
+set.seed(805)
+rf.model <- randomForest(y = as.factor(Nor_uncorr$Outcome), x = Nor_Feats[,RowNames], na.action = na.exclude)
+##Train the model:
+pred_Tr<-predict(rf.model,type = "prob")[,2]
+RocTr<-roc(Nor_uncorr$Outcome,pred_Tr,ci=TRUE)
+
+reportROC(as.factor(Nor_uncorr$Outcome), pred_Tr)
+
+# validate
+
+Pred_Va<-predict(rf.model,DataV_1, type = "prob")[,2]
+RocV<-roc(DataV_1$Outcome,Pred_Va,ci=TRUE)
+
+# set the threshold based on the training performance
+Pred_Va[Pred_Va>0.401]<-1
+Pred_Va[Pred_Va<0.401]<-0
+
+#cofustion matrix
+confusionMatrix(as.factor(Pred_Va), as.factor(DataV_1$Outcome), positive = '0')
+
+#calibratio plot
+plotcalibration_Nor <- plotCalibration(data.frame(as.numeric(RocV$original.response), RocV$original.predictor), 1, RocV$original.predictor, groups= 3, plottitle='Calibration')
