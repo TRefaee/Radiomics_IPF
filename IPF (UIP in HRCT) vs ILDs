@@ -1,0 +1,67 @@
+# set working directory 
+setwd("C:/Users/T.Refaee/Downloads/Bootstrapped-Modified-ComBat-main/Bootstrapped-Modified-ComBat-main/New folder")
+
+# Read data
+G1G3<-read.csv("NIH_Validation.csv", header= TRUE, sep = ";",dec = ",")
+
+# # split data into training and validation
+set.seed(1)
+PatientNumbers <- unique(G1G3$General_PatientID)
+ 
+Indices <- sample(length(PatientNumbers))
+PatientNumbers <- PatientNumbers[Indices]
+G1vs3_tr <- G1G3[G1G3$General_PatientID %in% PatientNumbers[1:(length(Indices) * 0.8)] ,]
+G1vs3_va <- G1G3[!(G1G3$General_PatientID %in% PatientNumbers[1:(length(Indices) * 0.8)]),]
+# 
+# #### feature selection ###
+
+# 1 Remove features with (near)Zero variance
+
+badCols1 <- nearZeroVar(G1vs3_tr)
+if(length(G1vs3_tr) > 0){
+  G1vs3_tr <- G1vs3_tr[, -nearZeroVar(G1vs3_tr)] 
+}
+
+G1vs3_tr1<-G1vs3_tr[,c(3,10,15:dim(G1vs3_tr)[2])]
+
+# 2 Remove highly correlated features
+corMatrix=  cor(G1vs3_tr1)
+highly_correlated_columns = findCorrelation(corMatrix, cutoff = 0.90, verbose = F, names = FALSE, exact = TRUE)
+G1vs3_uncorr1<- G1vs3_tr1[,-highly_correlated_columns]
+
+# 3 run Boruta algorith 
+set.seed(2)
+boruta_G1vs3_1<-Boruta(Outcome~., data = G1vs3_uncorr1, doTrac=2, maxRuns= 1000)
+G1vs3Feats1<-G1vs3_uncorr1[,getSelectedAttributes(boruta_G1vs3_1)]
+
+# 4 use Gini index to determine the  most important features
+
+set.seed(3)
+ImpFeats<-randomForest(y= as.factor(G1vs3_uncorr1$Outcome), x = G1vs3Feats1)
+Purities <- sort(ImpFeats$importance, decreasing=TRUE)
+Indexes <- match(Purities[1:10], ImpFeats$importance)
+RowNames <- row.names(ImpFeats$importance)[Indexes]
+
+####Random Forest
+set.seed(805)
+rf.model1 <- randomForest(y = as.factor(G1vs3_uncorr1$Outcome), x = G1vs3Feats1[,RowNames], na.action = na.exclude)
+
+##Train the model:
+pred_Tr<-predict(rf.model1,type = "prob")[,2]
+RocTr<-roc(G1vs3_uncorr1$Outcome,pred_Tr,ci=TRUE)
+
+reportROC(as.factor(G1vs3_uncorr1$Outcome), pred_Tr)
+
+
+# validate
+Pred_Va<-predict(rf.model1,G1vs3_va, type = "prob")[,2]
+RocV<-roc(G1vs3_va$Outcome,Pred_Va,ci=TRUE)
+
+# use the threseold of the training prediciton
+Pred_Va[Pred_Va>0.543]<-1
+Pred_Va[Pred_Va<0.543]<-0
+
+#cofustion matrix
+CMR<-confusionMatrix(as.factor(Pred_Va),as.factor(G1vs3_va$Outcome), positive = '1')
+#calibratio plot
+plotcalibration1<- plotCalibration(data.frame(as.numeric(RocV$original.response), RocV$original.predictor), 1, RocV$original.predictor, groups= 4, plottitle='Calibration')
