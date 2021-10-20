@@ -1,0 +1,70 @@
+
+
+G2_G3_S1<-read.csv("Data.csv", header= TRUE, sep = ";",dec = ",")
+
+# split data into training and validation
+set.seed(20)
+PatientNumbers2 <- unique(G2_G3_S1$General_PatientID)
+
+Indices2 <- sample(length(PatientNumbers2))
+PatientNumbers2 <- PatientNumbers2[Indices2]
+G2vs3_tr_s1 <- G2_G3_S1[G2_G3_S1$General_PatientID %in% PatientNumbers2[1:(length(Indices2) * 0.8)] ,]
+G2vs3_va_s1 <- G2_G3_S1[!(G2_G3_S1$General_PatientID %in% PatientNumbers2[1:(length(Indices2) * 0.8)]),]
+
+
+#### feature selection ###
+
+# 1 Remove features with (near)Zero variance
+
+badCols1 <- nearZeroVar(G2vs3_tr_s1)
+if(length(G2vs3_tr_s1) > 0){
+  G2vs3_tr_s1 <- G2vs3_tr_s1[, -nearZeroVar(G2vs3_tr_s1)] 
+}
+
+G2vs3_tr_s2<-G2vs3_tr_s1[,2:dim(G2vs3_tr_s1)[2]]
+
+# 3 Remove highly correlated features
+corMatrix=  cor(G2vs3_tr_s2)
+highly_correlated_columns = findCorrelation(corMatrix, cutoff = 0.90, verbose = F, names = FALSE, exact = TRUE)
+G2vs3_s1_uncorr<- G2vs3_tr_s2[,-highly_correlated_columns]
+
+# 2 run Boruta algorith 
+set.seed(21)
+boruta_G2vs3_s1<-Boruta(Outcome~., data = G2vs3_s1_uncorr, doTrac=2, maxRuns= 1000)
+print(boruta_G2vs3_s1) 
+G2vs3_s1_Feats<-G2vs3_s1_uncorr[,getSelectedAttributes(boruta_G2vs3_s1)]# save the selected featurs for further analysis( with out tentative)
+
+
+
+# 3 use Gini index to determine the  most important features
+
+# set.seed(3)
+# ImpFeats5<-randomForest(y= as.factor(G2vs3_s1_uncorr$Outcome), x = G2vs3_s1_Feats)
+# Purities5 <- sort(ImpFeats5$importance, decreasing=TRUE)
+# Indexes5 <- match(Purities5[1:10], ImpFeats5$importance)
+# RowNames5<- row.names(ImpFeats5$importance)[Indexes5]
+
+####Random Forest
+set.seed(987)
+rf.model_G2vs3_s1 <- randomForest(y = as.factor(G2vs3_s1_uncorr$Outcome), x = G2vs3_s1_Feats, na.action = na.exclude)
+
+##Train the model:
+pred_Tr_S1<-predict(rf.model_G2vs3_s1,type = "prob")[,2]
+RocTr_S1<-roc(G2vs3_s1_uncorr$Outcome,pred_Tr_S1,ci=TRUE)
+
+reportROC(as.factor(G2vs3_s1_uncorr$Outcome), pred_Tr_S1)
+
+# validate
+
+Pred_Va_S1<-predict(rf.model_G2vs3_s1,G2vs3_va_s1, type = "prob")[,2]
+RocV_S1<-roc(G2vs3_va_s1$Outcome,Pred_Va_S1,ci=TRUE)
+
+# use the threshold of the training prediciton 
+Pred_Va_S1[Pred_Va_S1>0.613]<-1
+Pred_Va_S1[Pred_Va_S1<0.613]<-0
+
+#cofustion matrix
+rf.CM_S1<-confusionMatrix(as.factor(Pred_Va_S1), as.factor(G2vs3_va_s1$Outcome), positive = '1')
+
+#calibratio plot
+plotcalibration <- plotCalibration(data.frame(as.numeric(RocV_S1$original.response), RocV_S1$original.predictor), 1, RocV_S1$original.predictor, groups= 4, plottitle='Calibration')
